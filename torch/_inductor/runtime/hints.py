@@ -318,6 +318,7 @@ class InductorMeta(typing.TypedDict, total=False):
     num_reduction: int
     autotune_hints: typing.Any
     RSPLIT_SIZE: int
+    has_dynamic_reduction_shape: bool
     has_loadstore_with_contiguous_rdim: bool
     tma_min_block_sizes: dict[str, int]
     uses_tma: bool

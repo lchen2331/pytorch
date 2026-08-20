@@ -145,6 +145,39 @@ class TestTritonHeuristics(TestCase):
             BenchmarkFailureReason.INVALID_CONFIG,
         )
 
+    def test_xpu_config_grf_mode_is_a_backend_option_and_cache_dimension(self):
+        from torch._inductor.runtime.runtime_utils import triton_config_to_hashable
+
+        autotuner = object.__new__(CachingAutotuner)
+        autotuner.device_props = DeviceProperties(
+            type="xpu",
+            index=0,
+            multi_processor_count=20,
+            cc=0,
+        )
+        autotuner.inductor_meta = {}
+        compile_meta = {"signature": {"XBLOCK": "constexpr"}}
+        with patch(
+            "torch._inductor.runtime.triton_heuristics.triton_helpers.get_backend_options_for_target",
+            return_value={"grf_mode": "default"},
+        ):
+            kernel_kwargs, backend_options = autotuner._partition_config_kwargs(
+                {"XBLOCK": 1, "grf_mode": "128"}, compile_meta
+            )
+
+        self.assertEqual(kernel_kwargs, {"XBLOCK": 1})
+        self.assertEqual(backend_options, {"grf_mode": "128"})
+        config_128 = triton.Config(
+            {"XBLOCK": 1, "grf_mode": "128"}, num_warps=4
+        )
+        config_256 = triton.Config(
+            {"XBLOCK": 1, "grf_mode": "256"}, num_warps=4
+        )
+        self.assertNotEqual(
+            triton_config_to_hashable(config_128),
+            triton_config_to_hashable(config_256),
+        )
+
     def test_native_matmul_config_block_numel_limit(self):
         device = DeviceProperties(
             type="cuda",
