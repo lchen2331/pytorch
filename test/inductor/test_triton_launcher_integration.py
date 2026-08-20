@@ -20,6 +20,7 @@ def _make_mock_launcher(
     num_warps=4,
     shared=0,
     launch_metadata_schema=None,
+    launch_cooperative_grid=False,
 ):
     """Create a mock launcher with bin (CompiledKernel)."""
     launcher = MagicMock()
@@ -33,6 +34,7 @@ def _make_mock_launcher(
     bin_mock.metadata.name = metadata_name
     bin_mock.metadata.num_warps = num_warps
     bin_mock.metadata.shared = shared
+    bin_mock.metadata.launch_cooperative_grid = launch_cooperative_grid
     bin_mock.num_warps = num_warps
     bin_mock.shared = shared
     bin_mock.launch_metadata_schema = launch_metadata_schema
@@ -120,6 +122,39 @@ class SaveGpuKernelSchemaTest(TestCase):
         )
         params = self._call_save_gpu_kernel(launcher)
         self.assertEqual(params["shared_mem"], 49152)
+
+    def test_xpu_cooperative_capacity_is_saved_for_cpp_wrapper(self):
+        from torch._inductor.runtime.triton_heuristics import CachingAutotuner
+
+        launcher = _make_mock_launcher(launch_cooperative_grid=True)
+        launcher.bin.asm = {
+            "zebin": b"\x00",
+            "spv": b"\x00",
+        }
+        launcher.bin.function = object()
+        launcher.bin.run.get_max_cooperative_group_count.return_value = 80
+        autotuner = _make_mock_autotuner()
+        autotuner.device_props.type = "xpu"
+
+        with (
+            patch(
+                "torch._inductor.codecache.CudaKernelParamCache.set"
+            ) as mock_cache_set,
+            patch(
+                "torch._inductor.runtime.triton_heuristics.config_to_dict",
+                return_value={"RSPLIT": 40},
+            ),
+        ):
+            CachingAutotuner.save_gpu_kernel(
+                autotuner, stream=123, launcher=launcher
+            )
+
+        params = mock_cache_set.call_args[0][1]
+        self.assertTrue(params["launch_cooperative_grid"])
+        self.assertEqual(params["max_cooperative_groups"], 80)
+        launcher.bin.run.get_max_cooperative_group_count.assert_called_once_with(
+            123, launcher.bin.function
+        )
 
     def test_fallback_when_no_schema(self):
         """Without schema, should use hasattr probing (metadata.name, etc.)."""
