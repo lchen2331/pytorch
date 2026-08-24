@@ -1341,12 +1341,13 @@ class CachingAutotuner(KernelInterface):
                     ),
                 }
             )
+        if self.device_props.type in ("cuda", "xpu"):
+            options["launch_cooperative_grid"] = compile_meta.get(
+                "launch_cooperative_grid", False
+            )
         if self.device_props.type == "cuda":
             options.update(
                 {
-                    "launch_cooperative_grid": compile_meta.get(
-                        "launch_cooperative_grid", False
-                    ),
                     "launch_pdl": compile_meta.get("launch_pdl", False),  # True
                 }
             )
@@ -1563,14 +1564,15 @@ class CachingAutotuner(KernelInterface):
             if self.device_props.type == "cpu"
             else {"rep": 40, "is_vetted_benchmarking": True}
         )
-        result = benchmarker.benchmark(
-            fn=kernel_call,
-            device=self.device_props.type,
-            **benchmark_kwargs,  # type: ignore[arg-type]
-        )
-        # benchmarker.benchmark() only returns float("inf") when catching an
-        # "invalid configuration" exception - all other exceptions are re-raised.
-        # Therefore, if result is inf here, it must be due to invalid config.
+        try:
+            result = benchmarker.benchmark(
+                fn=kernel_call,
+                device=self.device_props.type,
+                **benchmark_kwargs,  # type: ignore[arg-type]
+            )
+        except OutOfResources as e:
+            log.debug("Skipping out-of-resources config during autotuning: %s", e)
+            result = float("inf")
         if result == float("inf"):
             self.benchmark_failure_reasons[launcher] = (
                 BenchmarkFailureReason.INVALID_CONFIG
@@ -2147,6 +2149,22 @@ class CachingAutotuner(KernelInterface):
                     "AOTI CUDA target-arch packaging requires a Triton binary"
                 )
 
+        kernel_metadata = getattr(binary, "metadata", None)
+        launch_cooperative_grid = bool(
+            self.device_props.type == "xpu"
+            and getattr(kernel_metadata, "launch_cooperative_grid", False)
+        )
+        max_cooperative_groups = 0
+        if launch_cooperative_grid:
+            get_max_groups = getattr(
+                binary.run, "get_max_cooperative_group_count", None
+            )
+            if get_max_groups is None:
+                raise RuntimeError(
+                    "XPU cooperative launch requires Triton runtime capacity support"
+                )
+            max_cooperative_groups = get_max_groups(stream, binary.function)
+
         # Prefer Level 0 launch metadata schema (versioned, stable contract)
         # over hasattr probing of CompiledKernel internals.
         # TODO: When the AOTI C++ launch path gains cuLaunchKernelEx support for
@@ -2168,6 +2186,8 @@ class CachingAutotuner(KernelInterface):
                 "global_scratch": launcher.global_scratch,
                 "profile_scratch": launcher.profile_scratch,
                 "cuda_arch": cuda_arch,
+                "launch_cooperative_grid": launch_cooperative_grid,
+                "max_cooperative_groups": max_cooperative_groups,
             }
         else:
             # Fallback: hasattr probing for older Triton versions
@@ -2196,6 +2216,8 @@ class CachingAutotuner(KernelInterface):
                 "global_scratch": launcher.global_scratch,
                 "profile_scratch": launcher.profile_scratch,
                 "cuda_arch": cuda_arch,
+                "launch_cooperative_grid": launch_cooperative_grid,
+                "max_cooperative_groups": max_cooperative_groups,
             }
 
         from torch._inductor.codecache import CudaKernelParamCache

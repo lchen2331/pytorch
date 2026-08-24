@@ -54,6 +54,14 @@ static inline int getIntAttr(PyObject* obj, const char* attr) {
   return torch_python_thputils_unpack_int(val);
 }
 
+static inline bool getBoolAttr(PyObject* obj, const char* attr) {
+  RAIIPyObject val = PyObject_GetAttrString(obj, attr);
+  AOTI_TORCH_CHECK(val, "Failed to get attribute");
+  int result = PyObject_IsTrue(val.get());
+  AOTI_TORCH_CHECK(result >= 0, "Failed to convert attribute to bool");
+  return result != 0;
+}
+
 static inline int getOptionalIntAttr(
     PyObject* obj,
     const char* attr,
@@ -82,6 +90,10 @@ static inline LazyKernelCompileResult extractCompileResult(PyObject* result) {
   compile_result.mangled_name = getStringAttr(result, "mangled_name");
   compile_result.num_warps = getIntAttr(result, "num_warps");
   compile_result.shared_mem = getIntAttr(result, "shared_mem");
+  compile_result.launch_cooperative_grid =
+      getBoolAttr(result, "launch_cooperative_grid");
+  compile_result.max_cooperative_groups =
+      getIntAttr(result, "max_cooperative_groups");
   compile_result.xblocks = getIntListAttr(result, "xblocks");
   compile_result.yblocks = getIntListAttr(result, "yblocks");
   compile_result.zblocks = getIntListAttr(result, "zblocks");

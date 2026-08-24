@@ -149,7 +149,9 @@ static std::unique_ptr<sycl::kernel> _createKernel(
     uint32_t numWarps,
     uint32_t sharedMemory,
     void** params,
-    sycl::queue* queuePtr) {
+    sycl::queue* queuePtr,
+    bool launchCooperativeGrid = false,
+    uint32_t maxCooperativeGroups = 0) {
   uint32_t threadsPerWarp = kernelPtr->get_info<
       sycl::info::kernel_device_specific::compile_sub_group_size>(
       queuePtr->get_device());
@@ -166,12 +168,33 @@ static std::unique_ptr<sycl::kernel> _createKernel(
   sycl::range<3> globalRange(globalRangeZ, globalRangeY, globalRangeX);
   sycl::range<3> localRange(localRangeZ, localRangeY, localRangeX);
   sycl::nd_range<3> parallelWorkSize(globalRange, localRange);
+  uint64_t gridGroups = static_cast<uint64_t>(gridX) * gridY * gridZ;
+  if (launchCooperativeGrid &&
+      (maxCooperativeGroups == 0 || gridGroups > maxCooperativeGroups)) {
+    std::stringstream ss;
+    ss << "Cooperative grid requires " << gridGroups
+       << " groups, but the compiled kernel limit is "
+       << maxCooperativeGroups;
+    throw std::runtime_error(std::move(ss).str());
+  }
   if (sharedMemory > 0) {
     // numParams from sycl info  = user provided args + sharedMemoryBuffer
     numParams -= 1;
   }
   // Submit the imported kernel.
   auto cgf = [&](sycl::handler& cgh) {
+    auto submitKernel = [&]() {
+      if (launchCooperativeGrid) {
+        namespace syclex = sycl::ext::oneapi::experimental;
+        auto properties = syclex::properties{syclex::use_root_sync};
+        syclex::nd_launch(
+            cgh,
+            syclex::launch_config{parallelWorkSize, properties},
+            *kernelPtr);
+      } else {
+        cgh.parallel_for(parallelWorkSize, *kernelPtr);
+      }
+    };
     for (uint32_t i = 0; i < numParams; ++i) {
       cgh.set_arg(static_cast<int>(i), *(static_cast<void**>(params[i])));
     }
@@ -181,9 +204,9 @@ static std::unique_ptr<sycl::kernel> _createKernel(
       using share_mem_t = sycl::local_accessor<int8_t, dimensions>;
       share_mem_t localBuffer = share_mem_t(sharedMemory, cgh);
       cgh.set_arg(static_cast<int>(numParams), localBuffer);
-      cgh.parallel_for(parallelWorkSize, *kernelPtr);
+      submitKernel();
     } else {
-      cgh.parallel_for(parallelWorkSize, *kernelPtr);
+      submitKernel();
     }
   };
   queuePtr->submit(cgf);

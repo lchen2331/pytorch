@@ -11,7 +11,7 @@ from unittest.mock import MagicMock, patch, PropertyMock
 
 import torch
 from torch._dynamo.testing import rand_strided
-from torch._inductor.runtime.triton_compat import HAS_WARP_SPEC
+from torch._inductor.runtime.triton_compat import HAS_WARP_SPEC, OutOfResources
 from torch._inductor.utils import clone_preserve_strides
 from torch.testing._internal.common_utils import (
     instantiate_parametrized_tests,
@@ -54,6 +54,7 @@ from torch._inductor.runtime.triton_heuristics import (
     _persistent_reduction_configs,
     _reduction_configs,
     autotune_hints_to_configs,
+    BenchmarkFailureReason,
     cached_autotune,
     CachingAutotuner,
     CachingAutotunerPlugin,
@@ -105,6 +106,44 @@ class TestTritonHeuristics(TestCase):
             if key not in cfg.kwargs:
                 continue
             self.assertTrue(cfg.kwargs[key] <= TRITON_MAX_BLOCK[label])
+
+    def test_xpu_compile_options_forward_cooperative_launch(self):
+        autotuner = object.__new__(CachingAutotuner)
+        autotuner.device_props = types.SimpleNamespace(type="xpu")
+        cfg = triton.Config({}, num_warps=4, num_stages=1)
+        compile_meta = {
+            "num_warps": 4,
+            "num_stages": 1,
+            "debug": False,
+            "launch_cooperative_grid": True,
+        }
+
+        options = autotuner._create_compile_options(cfg, compile_meta)
+
+        self.assertTrue(options["launch_cooperative_grid"])
+
+    def test_bench_skips_out_of_resources(self):
+        autotuner = object.__new__(CachingAutotuner)
+        autotuner.custom_kernel = False
+        autotuner.inductor_meta = {}
+        autotuner.device_props = types.SimpleNamespace(type="xpu")
+        autotuner.benchmark_failure_reasons = {}
+        autotuner.get_device_interface = MagicMock()
+        autotuner.copy_args_to_cpu_if_needed = MagicMock(return_value={})
+        launcher = MagicMock()
+        launcher.n_spills = 0
+
+        with patch(
+            "torch._inductor.runtime.triton_heuristics.benchmarker.benchmark",
+            side_effect=OutOfResources(2, 1, "cooperative grid groups"),
+        ):
+            result = autotuner.bench(launcher)
+
+        self.assertEqual(result, float("inf"))
+        self.assertEqual(
+            autotuner.benchmark_failure_reasons[launcher],
+            BenchmarkFailureReason.INVALID_CONFIG,
+        )
 
     def test_native_matmul_config_block_numel_limit(self):
         device = DeviceProperties(

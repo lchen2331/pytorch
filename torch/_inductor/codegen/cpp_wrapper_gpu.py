@@ -617,6 +617,11 @@ class DeferredTritonCallWrapper:
             f" {kernel_name}_result.shared_mem,"
             f" kernel_args_, stream_"
         )
+        if V.graph.device_type == "xpu":
+            common_launch_args += (
+                f", {kernel_name}_result.launch_cooperative_grid,"
+                f" {kernel_name}_result.max_cooperative_groups"
+            )
         # stream_ comes from the generated wrapper signature on both JIT and
         # AOTI sides.
         launch_kernel_args = [
@@ -625,7 +630,16 @@ class DeferredTritonCallWrapper:
             "grid_2",
             f"{kernel_name}_result.num_warps",
             f"{kernel_name}_result.shared_mem",
+            "kernel_args_",
+            "stream_",
         ]
+        if V.graph.device_type == "xpu":
+            launch_kernel_args.extend(
+                [
+                    f"{kernel_name}_result.launch_cooperative_grid",
+                    f"{kernel_name}_result.max_cooperative_groups",
+                ]
+            )
 
         # kernel_args_ is consumed by both JIT and AOT launchKernel calls.
         prefix.writeline(f"void* kernel_args_[] = {{{call_args_str}}};")
@@ -647,8 +661,6 @@ class DeferredTritonCallWrapper:
                 [
                     f"kernels_.{kernel_name}",
                     *launch_kernel_args,
-                    "kernel_args_",
-                    "stream_",
                 ],
                 num_warps=f"{kernel_name}_result.num_warps",
                 shared_mem=f"{kernel_name}_result.shared_mem",
@@ -919,6 +931,13 @@ class DeferredTritonCallWrapper:
             "kernel_args_",
             "stream_",
         ]
+        if V.graph.device_type == "xpu":
+            launch_kernel_args.extend(
+                [
+                    str(bool(params.get("launch_cooperative_grid", False))).lower(),
+                    str(params.get("max_cooperative_groups", 0)),
+                ]
+            )
 
         enable_kernel_profile = config.cpp.enable_kernel_profile and sys.platform in [
             "linux",

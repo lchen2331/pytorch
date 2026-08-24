@@ -20,4 +20,6 @@ struct LazyKernelCompileResult {
   int config_index;
   int global_scratch;
   int profile_scratch;
+  bool launch_cooperative_grid;
+  int max_cooperative_groups;
 };

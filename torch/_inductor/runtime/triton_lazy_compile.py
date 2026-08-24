@@ -35,6 +35,8 @@ class TritonKernelCompileResult:
     mangled_name: str
     num_warps: int
     shared_mem: int
+    launch_cooperative_grid: bool
+    max_cooperative_groups: int
     xblocks: list[int]
     yblocks: list[int]
     zblocks: list[int]
@@ -186,6 +188,8 @@ def run_triton_kernel_with_autotune(
     mangled_name = cached_params["mangled_name"]
     num_warps = cached_params["num_warps"]
     shared_mem = cached_params["shared_mem"]
+    launch_cooperative_grid = cached_params.get("launch_cooperative_grid", False)
+    max_cooperative_groups = cached_params.get("max_cooperative_groups", 0)
 
     config = config_to_dict(launcher.config) if launcher.config else {}
 
@@ -265,6 +269,8 @@ def run_triton_kernel_with_autotune(
         mangled_name=mangled_name,
         num_warps=num_warps,
         shared_mem=shared_mem,
+        launch_cooperative_grid=launch_cooperative_grid,
+        max_cooperative_groups=max_cooperative_groups,
         xblocks=xblocks,
         yblocks=yblocks,
         zblocks=zblocks,
