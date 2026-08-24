@@ -11,8 +11,6 @@ struct LazyKernelCompileResult {
   std::string mangled_name;
   int num_warps;
   int shared_mem;
-  bool launch_cooperative_grid;
-  int max_cooperative_groups;
   std::vector<int> xblocks;
   std::vector<int> yblocks;
   std::vector<int> zblocks;
