@@ -817,14 +817,11 @@ class XPUReductionHeuristic(ReductionHeuristic):
         inductor_meta: dict[str, Any],
         triton_meta: dict[str, Any],
     ) -> list[Config]:
-        """Generate safe-to-benchmark XPU cooperative max-autotune candidates.
+        """Generate XPU cooperative candidates for max-autotune.
 
-        Dynamic reduction kernels use ``size_hints`` to build the compile-time
-        candidate set, just like other Inductor reduction autotuners.  The
-        candidates are benchmarked with the first real runtime ``rnumel``.
-        Cooperative launch safety is unaffected by that value: the grid size is
-        fixed by RSPLIT (and xnumel is required to be one), while the runtime
-        capacity gate validates every compiled binary before benchmarking it.
+        Use ``size_hints`` for static and dynamic reductions, then benchmark
+        with the first runtime shape. RSPLIT fixes the cooperative grid
+        (``xnumel == 1``), and the capacity gate validates each binary.
         """
         from torch._inductor.runtime.runtime_utils import ceildiv
         from torch._inductor.runtime.triton_heuristics import unique_configs
