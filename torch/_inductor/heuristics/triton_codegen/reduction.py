@@ -750,7 +750,7 @@ class XPUReductionHeuristic(ReductionHeuristic):
 
     @staticmethod
     def _add_cooperative_resource_candidates(
-        configs: list[Config], *, rnumel_per_split: int
+        configs: list[Config], *, rnumel_per_split: int, grf_modes: tuple[str, ...]
     ) -> list[Config]:
         """Add a small correlated R0/GRF search without a full cartesian product."""
         import copy
@@ -783,11 +783,31 @@ class XPUReductionHeuristic(ReductionHeuristic):
             resource_configs = [max(configs, key=lambda config: config.num_warps)]
 
         for config in resource_configs:
-            for grf_mode in ("128", "256"):
+            for grf_mode in grf_modes:
+                if grf_mode in ("256", "512") and config.num_warps > 32:
+                    continue
                 grf_config = copy.deepcopy(config)
                 grf_config.kwargs["grf_mode"] = grf_mode
                 configs.append(grf_config)
         return configs
+
+    @staticmethod
+    def _cooperative_grf_modes(triton_meta: dict[str, Any]) -> tuple[str, ...]:
+        """Return explicit GRF modes selected by the Triton XPU target."""
+        from torch._inductor.runtime.triton_compat import GPUTarget
+        from torch._inductor.runtime.triton_helpers import triton
+
+        device = triton_meta["device"]
+        try:
+            target = GPUTarget("xpu", device.cc, device.warp_size_or_default)
+            backend = triton.compiler.compiler.make_backend(target)
+            if getattr(backend, "device_arch", None) == "cri":
+                return ("128", "256", "512")
+        except (ImportError, RuntimeError, TypeError, AttributeError):
+            # Keep the current XPU candidate set if target discovery is not
+            # available in a codegen/test worker.
+            pass
+        return ("128", "256")
 
     def get_cooperative_configs(
         self,
@@ -831,6 +851,7 @@ class XPUReductionHeuristic(ReductionHeuristic):
             rnumel=rnumel,
             compute_partitions=triton_meta["device"].multi_processor_count,
         )
+        grf_modes = self._cooperative_grf_modes(triton_meta)
         candidates: list[Config] = []
         for split in splits:
             rnumel_per_split = ceildiv(rnumel, split)
@@ -849,7 +870,9 @@ class XPUReductionHeuristic(ReductionHeuristic):
                     triton_meta=triton_meta,
                 )
             configs = self._add_cooperative_resource_candidates(
-                configs, rnumel_per_split=rnumel_per_split
+                configs,
+                rnumel_per_split=rnumel_per_split,
+                grf_modes=grf_modes,
             )
             for config in configs:
                 config.kwargs["RSPLIT"] = split
