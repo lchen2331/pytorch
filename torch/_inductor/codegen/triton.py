@@ -7205,10 +7205,6 @@ class TritonKernel(SIMDKernel[TritonCSEVariable]):
             # Triton will not accept an OrderedSet for autotune_hints
             "autotune_hints": set(self.autotune_hints),  # noqa: set_linter
         }
-        if self.cooperative_reduction:
-            out["has_dynamic_reduction_shape"] = bool(
-                sympy.sympify(self.features.reduction_numel).free_symbols
-            )
         if self.mix_order_reduction:
             out["RSPLIT_SIZE"] = self.rsplit_size
         if config.deterministic or config.test_configs.force_filter_reduction_configs:
