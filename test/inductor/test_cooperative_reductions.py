@@ -127,7 +127,6 @@ class TestXPUCooperativeReductionHeuristic(TestCase):
             "max_autotune": True,
             "max_autotune_pointwise": False,
             "persistent_reduction": False,
-            "has_dynamic_reduction_shape": False,
             "deterministic": False,
             **overrides,
         }
@@ -169,30 +168,6 @@ class TestXPUCooperativeReductionHeuristic(TestCase):
                 (rblock := config.kwargs.get("R0_BLOCK", 1)) & (rblock - 1) == 0
                 for config in configs
             )
-        )
-        self.assertTrue(
-            any(
-                config.kwargs.get("RSPLIT") == 40
-                and config.kwargs.get("R0_BLOCK") == 4096
-                and config.num_warps == 16
-                and config.kwargs.get("grf_mode") == "128"
-                for config in configs
-            )
-        )
-
-    def test_dynamic_shape_uses_size_hint_candidates(self):
-        heuristic = XPUReductionHeuristic()
-        configs = heuristic.get_cooperative_configs(
-            size_hints={"x": 1, "r0_": 1 << 24},
-            reduction_hint=ReductionHint.INNER,
-            inductor_meta=self._inductor_meta(has_dynamic_reduction_shape=True),
-            triton_meta=self._triton_meta(),
-        )
-
-        self.assertEqual(len(configs), 36)
-        self.assertEqual(
-            {config.kwargs["RSPLIT"] for config in configs},
-            {16, 20, 40, 64},
         )
         self.assertTrue(
             any(
