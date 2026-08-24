@@ -140,17 +140,19 @@ static std::unique_ptr<sycl::kernel> _createKernel(
   return _createKernel(mod, funcName.c_str());
 }
 
-static void _launchKernelImpl(
+// Optional cooperative arguments are appended after the original launch ABI.
+// Existing ordinary/AOTI callers continue to use the default values.
+[[maybe_unused]] static void launchKernel(
     std::unique_ptr<sycl::kernel>& kernelPtr,
     uint32_t gridX,
     uint32_t gridY,
     uint32_t gridZ,
     uint32_t numWarps,
     uint32_t sharedMemory,
-    bool launchCooperativeGrid,
-    uint32_t maxCooperativeGroups,
     void** params,
-    sycl::queue* queuePtr) {
+    sycl::queue* queuePtr,
+    bool launchCooperativeGrid = false,
+    uint32_t maxCooperativeGroups = 0) {
   uint32_t threadsPerWarp = kernelPtr->get_info<
       sycl::info::kernel_device_specific::compile_sub_group_size>(
       queuePtr->get_device());
@@ -211,52 +213,4 @@ static void _launchKernelImpl(
   queuePtr->submit(cgf);
 }
 
-// Ordinary C++ wrapper/AOTI launch. Cooperative launch is intentionally kept
-// out of this ABI so the AOTI path remains unchanged.
-[[maybe_unused]] static void launchKernel(
-    std::unique_ptr<sycl::kernel>& kernelPtr,
-    uint32_t gridX,
-    uint32_t gridY,
-    uint32_t gridZ,
-    uint32_t numWarps,
-    uint32_t sharedMemory,
-    void** params,
-    sycl::queue* queuePtr) {
-  _launchKernelImpl(
-      kernelPtr,
-      gridX,
-      gridY,
-      gridZ,
-      numWarps,
-      sharedMemory,
-      false,
-      0,
-      params,
-      queuePtr);
-}
-
-// JIT C++ wrapper launch for XPU cooperative kernels.
-[[maybe_unused]] static void launchCooperativeKernel(
-    std::unique_ptr<sycl::kernel>& kernelPtr,
-    uint32_t gridX,
-    uint32_t gridY,
-    uint32_t gridZ,
-    uint32_t numWarps,
-    uint32_t sharedMemory,
-    bool launchCooperativeGrid,
-    uint32_t maxCooperativeGroups,
-    void** params,
-    sycl::queue* queuePtr) {
-  _launchKernelImpl(
-      kernelPtr,
-      gridX,
-      gridY,
-      gridZ,
-      numWarps,
-      sharedMemory,
-      launchCooperativeGrid,
-      maxCooperativeGroups,
-      params,
-      queuePtr);
-}
 #endif

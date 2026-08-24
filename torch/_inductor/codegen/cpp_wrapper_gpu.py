@@ -617,18 +617,17 @@ class DeferredTritonCallWrapper:
         )
         call_args_str = self._generate_lazy_scratch(prefix, wrapper, call_args_str)
 
-        jit_cooperative_launch_args = (
-            f" {kernel_name}_result.launch_cooperative_grid,"
-            f" {kernel_name}_result.max_cooperative_groups,"
-            if V.graph.device_type == "xpu"
-            else ""
-        )
         jit_launch_args = (
             f"grid_0, grid_1, grid_2,"
             f" {kernel_name}_result.num_warps,"
             f" {kernel_name}_result.shared_mem,"
-            f"{jit_cooperative_launch_args}"
             f" kernel_args_, stream_"
+            + (
+                f", {kernel_name}_result.launch_cooperative_grid,"
+                f" {kernel_name}_result.max_cooperative_groups"
+                if V.graph.device_type == "xpu"
+                else ""
+            )
         )
         aot_launch_args = (
             f"grid_0, grid_1, grid_2,"
@@ -652,12 +651,7 @@ class DeferredTritonCallWrapper:
             "linux",
             "win32",
         ]
-        jit_launch_name = (
-            "launchCooperativeKernel"
-            if V.graph.device_type == "xpu"
-            else "launchKernel"
-        )
-        prefix.writeline_jit(f"{jit_launch_name}({kernel_name}, {jit_launch_args});")
+        prefix.writeline_jit(f"launchKernel({kernel_name}, {jit_launch_args});")
         if enable_kernel_profile:
             profile_arg_types = [arg_type_lookup.get(n) for n in kernel_arg_names]
             profile_arg_sigs = [signature.get(n) for n in kernel_arg_names]
@@ -943,6 +937,7 @@ class DeferredTritonCallWrapper:
             num_warps,
             shared_mem,
         ]
+        launch_kernel_args.extend(["kernel_args_", "stream_"])
         if V.graph.device_type == "xpu" and not V.graph.aot_mode:
             launch_kernel_args.extend(
                 [
@@ -950,7 +945,6 @@ class DeferredTritonCallWrapper:
                     str(params.get("max_cooperative_groups", 0)),
                 ]
             )
-        launch_kernel_args.extend(["kernel_args_", "stream_"])
 
         enable_kernel_profile = config.cpp.enable_kernel_profile and sys.platform in [
             "linux",
@@ -968,12 +962,7 @@ class DeferredTritonCallWrapper:
                 shared_mem=shared_mem,
             )
         else:
-            launch_name = (
-                "launchCooperativeKernel"
-                if V.graph.device_type == "xpu" and not V.graph.aot_mode
-                else "launchKernel"
-            )
-            prefix.writeline(f"{launch_name}({', '.join(launch_kernel_args)});")
+            prefix.writeline(f"launchKernel({', '.join(launch_kernel_args)});")
 
     def generate_profiled_launch_kernel(
         self,
