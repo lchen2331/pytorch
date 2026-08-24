@@ -630,8 +630,9 @@ class DeferredTritonCallWrapper:
             "grid_2",
             f"{kernel_name}_result.num_warps",
             f"{kernel_name}_result.shared_mem",
+            "kernel_args_",
+            "stream_",
         ]
-        launch_kernel_args.extend(["kernel_args_", "stream_"])
         if V.graph.device_type == "xpu":
             launch_kernel_args.extend(
                 [
@@ -927,8 +928,9 @@ class DeferredTritonCallWrapper:
             "grid_2",
             num_warps,
             shared_mem,
+            "kernel_args_",
+            "stream_",
         ]
-        launch_kernel_args.extend(["kernel_args_", "stream_"])
         if V.graph.device_type == "xpu":
             launch_kernel_args.extend(
                 [
