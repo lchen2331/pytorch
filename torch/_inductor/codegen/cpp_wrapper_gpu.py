@@ -617,9 +617,8 @@ class DeferredTritonCallWrapper:
             f" {kernel_name}_result.shared_mem,"
             f" kernel_args_, stream_"
         )
-        jit_launch_args = common_launch_args
         if V.graph.device_type == "xpu":
-            jit_launch_args += (
+            common_launch_args += (
                 f", {kernel_name}_result.launch_cooperative_grid,"
                 f" {kernel_name}_result.max_cooperative_groups"
             )
@@ -632,6 +631,14 @@ class DeferredTritonCallWrapper:
             f"{kernel_name}_result.num_warps",
             f"{kernel_name}_result.shared_mem",
         ]
+        launch_kernel_args.extend(["kernel_args_", "stream_"])
+        if V.graph.device_type == "xpu":
+            launch_kernel_args.extend(
+                [
+                    f"{kernel_name}_result.launch_cooperative_grid",
+                    f"{kernel_name}_result.max_cooperative_groups",
+                ]
+            )
 
         # kernel_args_ is consumed by both JIT and AOT launchKernel calls.
         prefix.writeline(f"void* kernel_args_[] = {{{call_args_str}}};")
@@ -639,7 +646,7 @@ class DeferredTritonCallWrapper:
             "linux",
             "win32",
         ]
-        prefix.writeline_jit(f"launchKernel({kernel_name}, {jit_launch_args});")
+        prefix.writeline_jit(f"launchKernel({kernel_name}, {common_launch_args});")
         if enable_kernel_profile:
             profile_arg_types = [arg_type_lookup.get(n) for n in kernel_arg_names]
             profile_arg_sigs = [signature.get(n) for n in kernel_arg_names]
@@ -653,8 +660,6 @@ class DeferredTritonCallWrapper:
                 [
                     f"kernels_.{kernel_name}",
                     *launch_kernel_args,
-                    "kernel_args_",
-                    "stream_",
                 ],
                 num_warps=f"{kernel_name}_result.num_warps",
                 shared_mem=f"{kernel_name}_result.shared_mem",
@@ -924,7 +929,7 @@ class DeferredTritonCallWrapper:
             shared_mem,
         ]
         launch_kernel_args.extend(["kernel_args_", "stream_"])
-        if V.graph.device_type == "xpu" and not V.graph.aot_mode:
+        if V.graph.device_type == "xpu":
             launch_kernel_args.extend(
                 [
                     str(bool(params.get("launch_cooperative_grid", False))).lower(),
