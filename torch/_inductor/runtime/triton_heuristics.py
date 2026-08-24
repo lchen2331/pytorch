@@ -2155,6 +2155,21 @@ class CachingAutotuner(KernelInterface):
                     "AOTI CUDA target-arch packaging requires a Triton binary"
                 )
 
+        kernel_metadata = getattr(binary, "metadata", None)
+        launch_cooperative_grid = bool(
+            getattr(kernel_metadata, "launch_cooperative_grid", False)
+        )
+        max_cooperative_groups = 0
+        if self.device_props.type == "xpu" and launch_cooperative_grid:
+            get_max_groups = getattr(
+                binary.run, "get_max_cooperative_group_count", None
+            )
+            if get_max_groups is None:
+                raise RuntimeError(
+                    "XPU cooperative launch requires Triton runtime capacity support"
+                )
+            max_cooperative_groups = get_max_groups(stream, binary.function)
+
         # Prefer Level 0 launch metadata schema (versioned, stable contract)
         # over hasattr probing of CompiledKernel internals.
         # TODO: When the AOTI C++ launch path gains cuLaunchKernelEx support for
@@ -2176,6 +2191,8 @@ class CachingAutotuner(KernelInterface):
                 "global_scratch": launcher.global_scratch,
                 "profile_scratch": launcher.profile_scratch,
                 "cuda_arch": cuda_arch,
+                "launch_cooperative_grid": launch_cooperative_grid,
+                "max_cooperative_groups": max_cooperative_groups,
             }
         else:
             # Fallback: hasattr probing for older Triton versions
@@ -2204,6 +2221,8 @@ class CachingAutotuner(KernelInterface):
                 "global_scratch": launcher.global_scratch,
                 "profile_scratch": launcher.profile_scratch,
                 "cuda_arch": cuda_arch,
+                "launch_cooperative_grid": launch_cooperative_grid,
+                "max_cooperative_groups": max_cooperative_groups,
             }
 
         from torch._inductor.codecache import CudaKernelParamCache

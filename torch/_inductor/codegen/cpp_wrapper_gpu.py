@@ -105,6 +105,10 @@ def generate_aoti_kernel_config_header(kernel_names: list[str]) -> str:
         mangled_name = cpp_string_literal(params["mangled_name"])
         num_warps = params["num_warps"]
         shared_mem = params["shared_mem"]
+        launch_cooperative_grid = str(
+            bool(params.get("launch_cooperative_grid", False))
+        ).lower()
+        max_cooperative_groups = params.get("max_cooperative_groups", 0)
 
         # params["config"] is already a dict (from config_to_dict in CachingAutotuner)
         config_dict = params.get("config") or {}
@@ -167,6 +171,8 @@ def generate_aoti_kernel_config_header(kernel_names: list[str]) -> str:
             #define {macro_prefix}_MANGLED_NAME {mangled_name}
             #define {macro_prefix}_NUM_WARPS {num_warps}
             #define {macro_prefix}_SHARED_MEM {shared_mem}
+            #define {macro_prefix}_LAUNCH_COOPERATIVE_GRID {launch_cooperative_grid}
+            #define {macro_prefix}_MAX_COOPERATIVE_GROUPS {max_cooperative_groups}
             #define {macro_prefix}_XBLOCKS {braced(xblocks)}
             #define {macro_prefix}_YBLOCKS {braced(yblocks)}
             #define {macro_prefix}_ZBLOCKS {braced(zblocks)}
@@ -611,7 +617,20 @@ class DeferredTritonCallWrapper:
         )
         call_args_str = self._generate_lazy_scratch(prefix, wrapper, call_args_str)
 
-        common_launch_args = (
+        jit_cooperative_launch_args = (
+            f" {kernel_name}_result.launch_cooperative_grid,"
+            f" {kernel_name}_result.max_cooperative_groups,"
+            if V.graph.device_type == "xpu"
+            else ""
+        )
+        jit_launch_args = (
+            f"grid_0, grid_1, grid_2,"
+            f" {kernel_name}_result.num_warps,"
+            f" {kernel_name}_result.shared_mem,"
+            f"{jit_cooperative_launch_args}"
+            f" kernel_args_, stream_"
+        )
+        aot_launch_args = (
             f"grid_0, grid_1, grid_2,"
             f" {kernel_name}_result.num_warps,"
             f" {kernel_name}_result.shared_mem,"
@@ -633,7 +652,12 @@ class DeferredTritonCallWrapper:
             "linux",
             "win32",
         ]
-        prefix.writeline_jit(f"launchKernel({kernel_name}, {common_launch_args});")
+        jit_launch_name = (
+            "launchCooperativeKernel"
+            if V.graph.device_type == "xpu"
+            else "launchKernel"
+        )
+        prefix.writeline_jit(f"{jit_launch_name}({kernel_name}, {jit_launch_args});")
         if enable_kernel_profile:
             profile_arg_types = [arg_type_lookup.get(n) for n in kernel_arg_names]
             profile_arg_sigs = [signature.get(n) for n in kernel_arg_names]
@@ -656,7 +680,7 @@ class DeferredTritonCallWrapper:
             prefix.splice_aot(aot_profile)
         else:
             prefix.writeline_aot(
-                f"launchKernel(kernels_.{kernel_name}, {common_launch_args});"
+                f"launchKernel(kernels_.{kernel_name}, {aot_launch_args});"
             )
 
     def generate_lazy(self, wrapper: CppWrapperGpu):
@@ -706,6 +730,8 @@ class DeferredTritonCallWrapper:
                 {macro_prefix}_MANGLED_NAME,
                 {macro_prefix}_NUM_WARPS,
                 {macro_prefix}_SHARED_MEM,
+                {macro_prefix}_LAUNCH_COOPERATIVE_GRID,
+                {macro_prefix}_MAX_COOPERATIVE_GROUPS,
                 {macro_prefix}_XBLOCKS,
                 {macro_prefix}_YBLOCKS,
                 {macro_prefix}_ZBLOCKS,
@@ -917,6 +943,13 @@ class DeferredTritonCallWrapper:
             num_warps,
             shared_mem,
         ]
+        if V.graph.device_type == "xpu" and not V.graph.aot_mode:
+            launch_kernel_args.extend(
+                [
+                    str(bool(params.get("launch_cooperative_grid", False))).lower(),
+                    str(params.get("max_cooperative_groups", 0)),
+                ]
+            )
         launch_kernel_args.extend(["kernel_args_", "stream_"])
 
         enable_kernel_profile = config.cpp.enable_kernel_profile and sys.platform in [
@@ -935,7 +968,12 @@ class DeferredTritonCallWrapper:
                 shared_mem=shared_mem,
             )
         else:
-            prefix.writeline(f"launchKernel({', '.join(launch_kernel_args)});")
+            launch_name = (
+                "launchCooperativeKernel"
+                if V.graph.device_type == "xpu" and not V.graph.aot_mode
+                else "launchKernel"
+            )
+            prefix.writeline(f"{launch_name}({', '.join(launch_kernel_args)});")
 
     def generate_profiled_launch_kernel(
         self,
