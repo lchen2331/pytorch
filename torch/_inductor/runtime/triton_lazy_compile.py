@@ -246,8 +246,7 @@ def run_triton_kernel_with_autotune(
     log.debug(
         "Successfully autotuned Triton kernel: cubin_path=%s, "
         "runtime_bin_path=%s, mangled_name=%s, "
-        "num_warps=%d, shared_mem=%d, "
-        "xblocks=%s, yblocks=%s, zblocks=%s, r0blocks=%s, "
+        "num_warps=%d, shared_mem=%d, xblocks=%s, yblocks=%s, zblocks=%s, r0blocks=%s, "
         "rsplit=%d, rsplit_size=%d, config_index=%s, global_scratch=%s, profile_scratch=%s",
         cubin_path,
         runtime_bin_path,

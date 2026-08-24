@@ -20,8 +20,6 @@ struct LazyKernelCompileResult {
   int config_index;
   int global_scratch;
   int profile_scratch;
-  // Runtime-only metadata for the JIT C++ wrapper. Keeping these fields last
-  // lets AOTI aggregate initialization leave them at false/zero.
   bool launch_cooperative_grid;
   int max_cooperative_groups;
 };

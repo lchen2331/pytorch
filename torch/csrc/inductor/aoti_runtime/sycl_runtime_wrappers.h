@@ -211,5 +211,4 @@ static std::unique_ptr<sycl::kernel> _createKernel(
   };
   queuePtr->submit(cgf);
 }
-
 #endif
