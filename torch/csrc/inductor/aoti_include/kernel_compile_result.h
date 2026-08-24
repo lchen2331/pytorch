@@ -11,11 +11,6 @@ struct LazyKernelCompileResult {
   std::string mangled_name;
   int num_warps;
   int shared_mem;
-  // Runtime-only launch metadata used by the JIT C++ wrapper. AOTI native
-  // launchers keep these fields at their default values and do not consume
-  // them.
-  bool launch_cooperative_grid;
-  int max_cooperative_groups;
   std::vector<int> xblocks;
   std::vector<int> yblocks;
   std::vector<int> zblocks;
@@ -25,4 +20,8 @@ struct LazyKernelCompileResult {
   int config_index;
   int global_scratch;
   int profile_scratch;
+  // Runtime-only metadata for the JIT C++ wrapper. Keeping these fields last
+  // lets AOTI aggregate initialization leave them at false/zero.
+  bool launch_cooperative_grid;
+  int max_cooperative_groups;
 };

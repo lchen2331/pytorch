@@ -1522,10 +1522,7 @@ class CachingAutotuner(KernelInterface):
                     except Exception as e:
                         if isinstance(e, TypeError):
                             self._check_launcher_call_args(launcher, cloned_args)
-                        log_fn = (
-                            log.debug if isinstance(e, OutOfResources) else log.error
-                        )
-                        log_fn(
+                        log.error(
                             "Failed during launch %s with config: %s (num_warps=%s, num_stages=%s, kwargs=%s)",
                             kernel_name,
                             launcher.config,
@@ -1545,10 +1542,7 @@ class CachingAutotuner(KernelInterface):
                 except Exception as e:
                     if isinstance(e, TypeError):
                         self._check_launcher_call_args(launcher, cloned_args)
-                    log_fn = (
-                        log.debug if isinstance(e, OutOfResources) else log.error
-                    )
-                    log_fn(
+                    log.error(
                         "Failed during launch %s with config: %s (num_warps=%s, num_stages=%s, kwargs=%s)",
                         kernel_name,
                         launcher.config,
@@ -2157,10 +2151,11 @@ class CachingAutotuner(KernelInterface):
 
         kernel_metadata = getattr(binary, "metadata", None)
         launch_cooperative_grid = bool(
-            getattr(kernel_metadata, "launch_cooperative_grid", False)
+            self.device_props.type == "xpu"
+            and getattr(kernel_metadata, "launch_cooperative_grid", False)
         )
         max_cooperative_groups = 0
-        if self.device_props.type == "xpu" and launch_cooperative_grid:
+        if launch_cooperative_grid:
             get_max_groups = getattr(
                 binary.run, "get_max_cooperative_group_count", None
             )
