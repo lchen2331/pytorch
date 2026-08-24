@@ -140,8 +140,7 @@ static std::unique_ptr<sycl::kernel> _createKernel(
   return _createKernel(mod, funcName.c_str());
 }
 
-// Optional cooperative arguments are appended after the original launch ABI.
-// Existing ordinary/AOTI callers continue to use the default values.
+// GPU Cpp Wrapper API
 [[maybe_unused]] static void launchKernel(
     std::unique_ptr<sycl::kernel>& kernelPtr,
     uint32_t gridX,
