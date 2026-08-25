@@ -1327,8 +1327,8 @@ class CachingAutotuner(KernelInterface):
             for key, value in non_kernel_kwargs.items()
             if key in supported_backend_options
         }
-        # Preserve HIP's existing treatment of non-signature config kwargs. Triton
-        # remains responsible for rejecting any unsupported HIP option.
+        # HIP treats every non-signature config kwarg as a backend option;
+        # Triton validates whether the option is supported.
         if self.device_props.type == "hip":
             backend_options.update(non_kernel_kwargs)
         kernel_kwargs = {
@@ -4827,6 +4827,8 @@ def cooperative_reduction(
         inductor_meta=inductor_meta,
         triton_meta=triton_meta,
     )
+    # TODO(jansel): add more configs in max_autotune
+
     configs = _maybe_filter_configs_for_tma_restrictions(inductor_meta, configs)
     configs = filter_reduction_configs_for_determinism(inductor_meta, configs)
     return cached_autotune(
