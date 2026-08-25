@@ -9,6 +9,10 @@ from torch._inductor import config
 from torch._inductor.choices import InductorChoices
 from torch._inductor.codegen.simd_kernel_features import SIMDKernelFeatures
 from torch._inductor.codegen.triton import FixedTritonConfig, TritonKernel
+from torch._inductor.heuristics.triton_codegen.reduction import (
+    XPUReductionHeuristic,
+)
+from torch._inductor.runtime.hints import DeviceProperties, ReductionHint
 from torch._inductor.test_case import TestCase
 from torch._inductor.utils import run_and_get_code
 from torch.testing import assert_close
@@ -103,6 +107,90 @@ class TestVarianceReductionHeuristic(TestCase):
 
             self.assertEqual(result, expected)
             self.assertIn("welford_", source_code)
+
+
+class TestXPUCooperativeReductionHeuristic(TestCase):
+    @staticmethod
+    def _triton_meta(compute_partitions=20):
+        return {
+            "device": DeviceProperties(
+                type="xpu",
+                index=0,
+                multi_processor_count=compute_partitions,
+                cc=0,
+            )
+        }
+
+    @staticmethod
+    def _inductor_meta(**overrides):
+        return {
+            "max_autotune": True,
+            "max_autotune_pointwise": False,
+            "persistent_reduction": False,
+            "deterministic": False,
+            **overrides,
+        }
+
+    def test_split_candidates_follow_device_partitions(self):
+        heuristic = XPUReductionHeuristic()
+
+        self.assertEqual(
+            heuristic._cooperative_split_candidates(
+                rnumel=1 << 24, compute_partitions=20
+            ),
+            [16, 20, 40, 64],
+        )
+        self.assertEqual(
+            heuristic._cooperative_split_candidates(rnumel=17, compute_partitions=20),
+            [16, 17],
+        )
+        self.assertEqual(
+            heuristic._cooperative_split_candidates(rnumel=7, compute_partitions=20),
+            [7],
+        )
+
+    def test_max_autotune_contains_device_derived_candidate(self):
+        heuristic = XPUReductionHeuristic()
+        configs = heuristic.get_cooperative_configs(
+            size_hints={"x": 1, "r0_": 1 << 24},
+            reduction_hint=ReductionHint.INNER,
+            inductor_meta=self._inductor_meta(),
+            triton_meta=self._triton_meta(),
+        )
+
+        self.assertTrue(configs)
+        self.assertEqual(
+            {config.kwargs["RSPLIT"] for config in configs},
+            {16, 20, 40, 64},
+        )
+        self.assertTrue(
+            all(
+                (rblock := config.kwargs.get("R0_BLOCK", 1)) & (rblock - 1) == 0
+                for config in configs
+            )
+        )
+        self.assertTrue(
+            any(
+                config.kwargs.get("RSPLIT") == 40
+                and config.kwargs.get("R0_BLOCK") == 4096
+                and config.num_warps == 16
+                for config in configs
+            )
+        )
+
+    def test_non_max_autotune_and_deterministic_keep_single_config(self):
+        heuristic = XPUReductionHeuristic()
+        for fallback_meta in (
+            self._inductor_meta(deterministic=True),
+            self._inductor_meta(max_autotune=False),
+        ):
+            configs = heuristic.get_cooperative_configs(
+                size_hints={"x": 1, "r0_": 1 << 24},
+                reduction_hint=ReductionHint.INNER,
+                inductor_meta=fallback_meta,
+                triton_meta=self._triton_meta(),
+            )
+            self.assertEqual({config.kwargs["RSPLIT"] for config in configs}, {16})
 
 
 class _TestingHeuristics(InductorChoices):

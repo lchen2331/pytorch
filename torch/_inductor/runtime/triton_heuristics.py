@@ -1230,33 +1230,16 @@ class CachingAutotuner(KernelInterface):
         compile_meta["num_warps"] = cfg.num_warps
         compile_meta["num_stages"] = cfg.num_stages
 
-        cfg_kwargs = {**cfg.kwargs}
-        if self.device_props.type == "hip":
-            kernel_arg_names = OrderedSet(compile_meta["signature"])
-            combo_meta = self.inductor_meta.get("combo_grid_meta") or {}
-            kernel_arg_names.update(combo_meta.get("block_arg_names", ()))
-            # AttrsDescriptor signatures omit constexprs, so combo block argument
-            # names are carried separately in combo_grid_meta.
-            # Any HIP config kwarg that is *not* in that set is not a kernel
-            # argument at all; it is a backend compile option that should be forwarded
-            # to triton.compile via `options`, not materialized as a constexpr.
-            backend_options = {
-                key: value
-                for key, value in cfg_kwargs.items()
-                if key not in kernel_arg_names
+        cfg_kwargs, backend_options = self._partition_config_kwargs(
+            dict(cfg.kwargs), compile_meta
+        )
+        if backend_options:
+            # Backend-only options remain in Config.kwargs for cache identity, but
+            # must not be interpreted as signature-bound constexpr arguments.
+            compile_meta["backend_options"] = {
+                **compile_meta.get("backend_options", {}),
+                **backend_options,
             }
-            cfg_kwargs = {
-                key: value
-                for key, value in cfg_kwargs.items()
-                if key in kernel_arg_names
-            }
-            if backend_options:
-                # Stash backend-only options separately so they do not get mixed into
-                # `constants`, which are interpreted as signature-bound constexpr args.
-                compile_meta["backend_options"] = {
-                    **compile_meta.get("backend_options", {}),
-                    **backend_options,
-                }
         compile_meta["constants"].update(cfg_kwargs)
 
         for i in get_constexprs(self.fn):
@@ -1316,6 +1299,44 @@ class CachingAutotuner(KernelInterface):
                 compile_meta[k] = v
 
         return compile_meta
+
+    def _partition_config_kwargs(
+        self, cfg_kwargs: dict[str, Any], compile_meta: dict[str, Any]
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        """Separate signature constants from target-supported backend options."""
+        kernel_arg_names = OrderedSet(compile_meta["signature"])
+        combo_meta = self.inductor_meta.get("combo_grid_meta") or {}
+        kernel_arg_names.update(combo_meta.get("block_arg_names", ()))
+        non_kernel_kwargs = {
+            key: value
+            for key, value in cfg_kwargs.items()
+            if key not in kernel_arg_names
+        }
+        if not non_kernel_kwargs:
+            return cfg_kwargs, {}
+        target = GPUTarget(
+            self.device_props.type,
+            self.device_props.cc,
+            self.device_props.warp_size_or_default,
+        )
+        supported_backend_options = triton_helpers.get_backend_options_for_target(
+            target
+        )
+        backend_options = {
+            key: value
+            for key, value in non_kernel_kwargs.items()
+            if key in supported_backend_options
+        }
+        # HIP treats every non-signature config kwarg as a backend option;
+        # Triton validates whether the option is supported.
+        if self.device_props.type == "hip":
+            backend_options.update(non_kernel_kwargs)
+        kernel_kwargs = {
+            key: value
+            for key, value in cfg_kwargs.items()
+            if key not in backend_options
+        }
+        return kernel_kwargs, backend_options
 
     def _create_compile_options(
         self, cfg: Config, compile_meta: dict[str, Any]

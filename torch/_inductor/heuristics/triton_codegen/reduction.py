@@ -725,6 +725,157 @@ class ROCmReductionHeuristic(ReductionHeuristic):
 class XPUReductionHeuristic(ReductionHeuristic):
     """Reduction configs for XPU devices."""
 
+    @staticmethod
+    def _cooperative_split_candidates(
+        *, rnumel: int, compute_partitions: int
+    ) -> list[int]:
+        """Return RSPLIT search points derived only from device resources."""
+        from torch._inductor.runtime.hints import TRITON_MAX_RSPLIT
+        from torch._inductor.runtime.runtime_utils import last_power_of_2
+
+        if compute_partitions <= 0:
+            raise AssertionError("XPU compute partitions must be positive")
+        group_targets = (
+            last_power_of_2(compute_partitions),
+            compute_partitions,
+            2 * compute_partitions,
+            4 * compute_partitions,
+        )
+        splits: list[int] = []
+        for target in group_targets:
+            split = max(1, min(rnumel, target, TRITON_MAX_RSPLIT))
+            if split not in splits:
+                splits.append(split)
+        return splits
+
+    @staticmethod
+    def _add_cooperative_resource_candidates(
+        configs: list[Config], *, rnumel_per_split: int, grf_modes: tuple[str, ...]
+    ) -> list[Config]:
+        """Add a small correlated R0/GRF search without a full cartesian product."""
+        import copy
+
+        from torch._inductor.runtime.hints import TRITON_MAX_BLOCK
+        from torch._inductor.runtime.runtime_utils import last_power_of_2
+
+        configs = [copy.deepcopy(config) for config in configs]
+        if not configs:
+            return configs
+        rblock_configs = [config for config in configs if "R0_BLOCK" in config.kwargs]
+        if rblock_configs:
+            largest_rblock_config = max(
+                rblock_configs, key=lambda config: config.kwargs["R0_BLOCK"]
+            )
+            resource_configs = [largest_rblock_config]
+            larger_rblock = last_power_of_2(
+                min(
+                    2 * largest_rblock_config.kwargs["R0_BLOCK"],
+                    rnumel_per_split,
+                    TRITON_MAX_BLOCK["R0_"],
+                )
+            )
+            if larger_rblock > largest_rblock_config.kwargs["R0_BLOCK"]:
+                larger_config = copy.deepcopy(largest_rblock_config)
+                larger_config.kwargs["R0_BLOCK"] = larger_rblock
+                configs.append(larger_config)
+                resource_configs.append(larger_config)
+        else:
+            resource_configs = [max(configs, key=lambda config: config.num_warps)]
+
+        for config in resource_configs:
+            for grf_mode in grf_modes:
+                if grf_mode in ("256", "512") and config.num_warps > 32:
+                    continue
+                grf_config = copy.deepcopy(config)
+                grf_config.kwargs["grf_mode"] = grf_mode
+                configs.append(grf_config)
+        return configs
+
+    @staticmethod
+    def _cooperative_grf_modes(triton_meta: dict[str, Any]) -> tuple[str, ...]:
+        """Return explicit GRF modes selected by the Triton XPU target."""
+        from torch._inductor.runtime.triton_compat import GPUTarget
+        from torch._inductor.runtime.triton_helpers import triton
+
+        device = triton_meta["device"]
+        try:
+            target = GPUTarget("xpu", device.cc, device.warp_size_or_default)
+            backend = triton.compiler.compiler.make_backend(target)
+            if getattr(backend, "device_arch", None) == "cri":
+                return ("128", "256", "512")
+        except (ImportError, RuntimeError, TypeError, AttributeError):
+            # Keep the current XPU candidate set if target discovery is not
+            # available in a codegen/test worker.
+            pass
+        return ("128", "256")
+
+    def get_cooperative_configs(
+        self,
+        *,
+        size_hints: dict[str, int],
+        reduction_hint: Any,
+        inductor_meta: dict[str, Any],
+        triton_meta: dict[str, Any],
+    ) -> list[Config]:
+        """Generate XPU cooperative candidates for max-autotune.
+
+        Use ``size_hints`` for static and dynamic reductions, then benchmark
+        with the first runtime shape. RSPLIT fixes the cooperative grid
+        (``xnumel == 1``), and the capacity gate validates each binary.
+        """
+        from torch._inductor.runtime.runtime_utils import ceildiv
+        from torch._inductor.runtime.triton_heuristics import unique_configs
+
+        if len(size_hints) != 2:
+            raise AssertionError(
+                "Cooperative reductions don't support tiling reduction dims"
+            )
+
+        xnumel, rnumel = size_hints["x"], size_hints["r0_"]
+        max_autotune = bool(
+            inductor_meta.get("max_autotune")
+            or inductor_meta.get("max_autotune_pointwise")
+        )
+        if not max_autotune or xnumel != 1 or inductor_meta.get("deterministic", False):
+            return super().get_cooperative_configs(
+                size_hints=size_hints,
+                reduction_hint=reduction_hint,
+                inductor_meta=inductor_meta,
+                triton_meta=triton_meta,
+            )
+
+        splits = self._cooperative_split_candidates(
+            rnumel=rnumel,
+            compute_partitions=triton_meta["device"].multi_processor_count,
+        )
+        grf_modes = self._cooperative_grf_modes(triton_meta)
+        candidates: list[Config] = []
+        for split in splits:
+            rnumel_per_split = ceildiv(rnumel, split)
+            split_size_hints = {"x": xnumel, "r0_": rnumel_per_split}
+            if inductor_meta["persistent_reduction"]:
+                configs = self.get_persistent_configs(
+                    size_hints=split_size_hints,
+                    reduction_hint=reduction_hint,
+                    inductor_meta=inductor_meta,
+                    triton_meta=triton_meta,
+                )
+            else:
+                configs = self.get_configs(
+                    size_hints=split_size_hints,
+                    inductor_meta=inductor_meta,
+                    triton_meta=triton_meta,
+                )
+            configs = self._add_cooperative_resource_candidates(
+                configs,
+                rnumel_per_split=rnumel_per_split,
+                grf_modes=grf_modes,
+            )
+            for config in configs:
+                config.kwargs["RSPLIT"] = split
+                candidates.append(config)
+        return unique_configs(candidates)
+
     def _persistent_inner_config(
         self,
         size_hints,
