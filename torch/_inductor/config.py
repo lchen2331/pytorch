@@ -2769,6 +2769,11 @@ class xpu(cutlass):
     # Path to Intel OneAPI.
     oneapi_root: str | None = None
 
+    # Prepack static MXFP8 weight scales for XPU _scaled_mm during compilation.
+    mxfp8_weight_scale_prepack = (
+        os.environ.get("TORCHINDUCTOR_XPU_MXFP8_WEIGHT_SCALE_PREPACK", "0") == "1"
+    )
+
     cutlass_dir = os.path.realpath(os.environ.get("TORCHINDUCTOR_CUTLASS_DIR", ""))
 
 
