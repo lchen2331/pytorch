@@ -122,6 +122,8 @@ from .exc import InductorError
 from .fx_passes.joint_graph import joint_graph_passes
 from .fx_passes.post_grad import post_grad_passes, view_to_reshape
 from .fx_passes.pre_grad import pre_grad_passes
+from .fx_passes.xpu_mxfp8_prepack import prepack_xpu_mxfp8_weight_scales
+from .freezing_utils import has_frozen_params
 from .graph import GraphLowering
 from .ir import get_device_type, IRNode
 from .triton_bundler import TritonBundler
@@ -1165,6 +1167,9 @@ def _compile_fx_inner(
             and not aot_mode
             and backends_support_caching
             and not torch._functorch.config.bundled_autograd_cache
+            and not (
+                config.xpu.mxfp8_weight_scale_prepack and has_frozen_params(gm)
+            )
         )
         local = config.fx_graph_cache
         remote = fx_graph_remote_cache
@@ -1628,7 +1633,9 @@ class _InProcessFxCompile(FxCompile):
                 # of autograd, so there should be no more autograd-related API's in the
                 # graph.
                 with torch.no_grad():
-                    fake_mode = fake_tensor_prop(gm, example_inputs)
+                    fake_mode = fake_tensor_prop(
+                        gm, example_inputs, has_frozen_params(gm)
+                    )
 
             _recursive_record_original_output_strides(gm)
 
@@ -2780,6 +2787,10 @@ def compile_fx_forward(
         is_inference: Whether this is an inference graph.
     """
 
+    fixed = torch._inductor.utils.num_fw_fixed_arguments(
+        num_example_inputs, len(example_inputs)
+    )
+
     if is_inference:
         # partition_fn won't be called
         trace_structured(
@@ -2813,6 +2824,20 @@ def compile_fx_forward(
         inputs_devices = get_inputs_devices(example_inputs, gm)
         gm = _recursive_joint_graph_passes(gm, input_device=next(iter(inputs_devices)))
 
+        if config.xpu.mxfp8_weight_scale_prepack:
+            real_inputs = list(example_inputs)
+            context = torch._guards.TracingContext.try_get()
+            if (
+                context is not None
+                and context.params_flat_unwrap_subclasses is not None
+            ):
+                for index, param in enumerate(
+                    context.params_flat_unwrap_subclasses[:fixed]
+                ):
+                    if param is not None and index < len(real_inputs):
+                        real_inputs[index] = param
+            prepack_xpu_mxfp8_weight_scales(gm, real_inputs, list(range(fixed)))
+
         trace_structured(
             "artifact",
             metadata_fn=lambda: {
@@ -2823,10 +2848,6 @@ def compile_fx_forward(
                 print_output=False, include_stride=True, include_device=True
             ),
         )
-
-    fixed = torch._inductor.utils.num_fw_fixed_arguments(
-        num_example_inputs, len(example_inputs)
-    )
 
     model_outputs_node = output_node(gm)
     clone_live_user_outputs = _cudagraph_trees_clone_live_user_outputs()
